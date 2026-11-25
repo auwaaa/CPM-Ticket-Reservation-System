@@ -56,52 +56,38 @@ This project models and formally verifies a concurrent **Ticket Reservation Syst
 
 ## Quick Start (Windows 11)
 
-### Prerequisites
+> **Note:** Ubuntu/WSL is **not** required. SPIN and GCC run natively on Windows 11.
 
-Choose **one** of the two setups below on Windows 11:
+### Prerequisites (Native Windows 11)
+1. Download the Windows `spin` binary (`spin.exe`) from [spinroot.com](https://spinroot.com/spin/Binaries/index.html) and add it to your `PATH`.
+2. Install GCC via [MSYS2](https://www.msys2.org/) (`pacman -S mingw-w64-ucrt-x86_64-gcc`) or WinLibs/MinGW-w64 and add `gcc.exe` to your `PATH`.
+3. *(Optional)* Use **Git Bash** (included with Git for Windows) to run `scripts/run_checks.sh`.
 
-- **Option A — Native Windows (PowerShell / Git Bash):**
-  1. Download the Windows `spin` binary (`spin.exe`) from [spinroot.com](https://spinroot.com/spin/Binaries/index.html) and add it to your `PATH`.
-  2. Install GCC via [MSYS2](https://www.msys2.org/) (`pacman -S mingw-w64-ucrt-x86_64-gcc`) or WinLibs/MinGW-w64 and add `gcc.exe` to your `PATH`.
-  3. Use **Git Bash** (included with Git for Windows) if you want to run `scripts/run_checks.sh`.
-- **Option B — WSL2 (Recommended for `run_checks.sh`):**
-  ```powershell
-  wsl --install -d Ubuntu
-  ```
-  Inside the WSL Ubuntu terminal:
-  ```bash
-  sudo apt-get update && sudo apt-get install -y spin gcc
-  ```
-
-### 1. Random Simulation
+### 1. Random Simulation (PowerShell)
 ```powershell
 spin -p -g -l models/02_final.pml
 ```
 
-### 2. Safety Verification (Deadlocks, Assertions, Safety LTL)
-In PowerShell:
+### 2. Safety Verification (PowerShell)
 ```powershell
 spin -a models/02_final.pml
 gcc -O2 -DSAFETY -o pan.exe pan.c
 .\pan.exe -E
 ```
-*(In Git Bash or WSL2, use `./pan -E`.)*
 
-### 3. Liveness Verification (Acceptance Cycles with Weak Fairness `-a -f`)
-In PowerShell:
+### 3. Liveness Verification (PowerShell, Weak Fairness `-a -f`)
 ```powershell
 spin -a models/02_final.pml
 gcc -O2 -o pan.exe pan.c
 .\pan.exe -a -f -N L1
 ```
 
-### 4. Automated Check & Metrics Logging (Git Bash or WSL2)
+### 4. Automated Check & Metrics Logging (Git Bash)
 ```bash
-chmod +x scripts/run_checks.sh
 ./scripts/run_checks.sh models/02_final.pml
 ```
 
-### 5. Replay a Saved Counterexample Trail
+### 5. Replay a Saved Counterexample Trail (PowerShell)
 ```powershell
 spin -t trails/<example>.trail -p -g -l models/01_naive.pml
 ```
