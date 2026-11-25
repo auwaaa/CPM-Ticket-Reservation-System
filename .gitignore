@@ -1,0 +1,21 @@
+# SPIN & GCC build artifacts (root and models/)
+pan
+pan.*
+models/pan
+models/pan.*
+*.tmp
+models/*.tmp
+_spin_nvr.tmp
+models/_spin_nvr.tmp
+a.out
+models/a.out
+*.trail
+models/*.trail
+
+# Explicitly keep saved counterexample trails
+!trails/*.trail
+
+# OS / Editor files
+.DS_Store
+.vscode/
+*.swp

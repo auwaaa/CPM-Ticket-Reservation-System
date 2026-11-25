@@ -1,0 +1,92 @@
+# Ticket Reservation System in PROMELA and LTL
+
+**Course:** Verification of Concurrent Program Models (CPM) — Group 2
+
+## Overview
+
+This project models and formally verifies a concurrent **Ticket Reservation System** in **PROMELA** using the **SPIN** model checker and **Linear Temporal Logic (LTL)**.
+
+### System Architecture & Model Assumptions
+- **Participants:**
+  - `1` **Seller**
+  - `N >= 2` **Buyers** (each with a unique `buyer_id`)
+  - `1` **Marketplace** (central coordinator / state machine)
+  - `1` **Payment Service** (handles charging, escrow/holding, payout, and refunds)
+- **Lifecycle States (7 states):**
+  `AVAILABLE` → `RESERVED` → `PAID` → `DELIVERED` → `SETTLED` (and terminal branches `WITHDRAWN`, `REFUNDED`)
+- **Confirmation Policy (Assumption A9):**
+  There is no confirmation window timeout; only the winning buyer can confirm delivery under Assumption A9.
+
+---
+
+## 4-Member Role Split
+
+| Member | Role & Ownership | Primary Files |
+| :--- | :--- | :--- |
+| **M1** | Marketplace process & shared definitions | `models/defs.pml`, Marketplace proctype in `01_naive.pml` / `02_final.pml` |
+| **M2** | Seller & Buyer processes (`N >= 2` concurrent buyers) | Seller & Buyer proctypes in `01_naive.pml` / `02_final.pml` |
+| **M3** | PaymentService process & LTL properties (`S1`–`S9`, `L1`–`L3`) | PaymentService proctype & `ltl` blocks in `models/` |
+| **M4** | SPIN verification, counterexample trails, scalability & report | `scripts/run_checks.sh`, `trails/`, `results/metrics.csv`, `docs/` |
+
+---
+
+## 5-Day Sprint Git Workflow
+
+1. **Freeze `models/defs.pml` first:** Agree on `mtype` values, channel signatures, and ghost variables before parallelizing process implementations.
+2. **Keep models separate:**
+   - `models/01_naive.pml` — Initial naive model (used to demonstrate concurrency bugs and capture counterexamples in `trails/`).
+   - `models/02_final.pml` — Corrected model that satisfies all safety (`S1`–`S9`) and liveness (`L1`–`L3`) specifications.
+3. **Feature branches only:** Develop on dedicated branches (`feat/marketplace`, `feat/participants`, `feat/payment-ltl`, `feat/verification`) and open PRs into `main`.
+4. **Gate `main` with `run_checks.sh`:** Never push or merge directly to `main` without passing `./scripts/run_checks.sh`.
+
+---
+
+## Repository Structure
+
+```text
+.
+├── models/          # PROMELA models (defs.pml, 01_naive.pml, 02_final.pml)
+├── scripts/         # Automation scripts (run_checks.sh)
+├── trails/          # Saved SPIN counterexample .trail files from 01_naive.pml
+├── results/         # SPIN verification logs and scalability metrics (metrics.csv)
+└── docs/            # Project proposal, work plan, report drafts, and diagrams
+```
+
+---
+
+## Quick Start (Ubuntu Linux)
+
+### Prerequisites
+```bash
+sudo apt-get update && sudo apt-get install -y spin gcc
+```
+
+### 1. Random Simulation
+```bash
+spin -p -g -l models/02_final.pml
+```
+
+### 2. Safety Verification (Deadlocks, Assertions, Safety LTL)
+```bash
+spin -a models/02_final.pml
+gcc -O2 -DSAFETY -o pan pan.c
+./pan -E
+```
+
+### 3. Liveness Verification (Acceptance Cycles with Weak Fairness `-a -f`)
+```bash
+spin -a models/02_final.pml
+gcc -O2 -o pan pan.c
+./pan -a -f -N L1
+```
+
+### 4. Automated Check & Metrics Logging
+```bash
+chmod +x scripts/run_checks.sh
+./scripts/run_checks.sh models/02_final.pml
+```
+
+### 5. Replay a Saved Counterexample Trail
+```bash
+spin -t trails/<example>.trail -p -g -l models/01_naive.pml
+```
