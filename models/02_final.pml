@@ -1,38 +1,66 @@
 /*
  * 02_final.pml - Verified model of the Ticket Reservation System
  * Must satisfy all safety properties (S1-S9) and liveness properties (L1-L3).
+ *
+ * File Organization: Option A (Single-file section markers per team agreement)
  */
 
 #include "defs.pml"
 
-/* === M1 SECTION === */
+/* === M1 SECTION START: Marketplace === */
 proctype Marketplace() {
     mtype:msg msg;
     byte b, r;
     bool charge_in_flight = false;
+    bool withdraw_pending = false;
     bool refund_in_flight = false;
+    bool refund_done = false;
     bool payout_in_flight = false;
+    bool payout_done = false;
     byte pending_charges = 0;
     byte pending_stale_refunds = 0;
+    byte confirm_b = NO_BUYER;
+    byte confirm_r = NO_RES;
 
-    /* Phase 1: Active ticket lifecycle & in-flight payment settlement */
+    /* Phase 1: Active ticket lifecycle & stale-operation drain before terminal state */
     do
-    :: ((ticket_state == SETTLED || ticket_state == WITHDRAWN || ticket_state == REFUNDED)
-        && pending_charges == 0
-        && pending_stale_refunds == 0
-        && !refund_in_flight
-        && !payout_in_flight) ->
+    :: is_terminal ->
         break
+
+    /* Complete terminal transitions only after stale charges/refunds drain (guarantees S8 held_cnt == 0) */
+    :: (withdraw_pending && pending_charges == 0 && pending_stale_refunds == 0) ->
+        d_step {
+            withdraw_pending = false;
+            ticket_state = WITHDRAWN
+        };
+        seller_ch ! withdraw_ok
+
+    :: (payout_done && pending_charges == 0 && pending_stale_refunds == 0) ->
+        d_step {
+            payout_done = false;
+            ticket_state = SETTLED
+        };
+        if
+        :: (confirm_b < N) -> buyer_ch[confirm_b] ! confirm_ok(confirm_r)
+        :: else -> skip
+        fi
+
+    :: (refund_done && pending_charges == 0 && pending_stale_refunds == 0) ->
+        d_step {
+            refund_done = false;
+            sale_refunded = true;
+            ticket_state = REFUNDED
+        }
 
     :: mkt_req ? msg, b, r ->
         if
         :: msg == reserve ->
             if
-            :: (ticket_state == AVAILABLE && b < N) ->
+            :: (ticket_state == AVAILABLE && !withdraw_pending && b < N) ->
                 d_step {
                     current_res_id = next_res_id;
                     if
-                    :: (next_res_id >= MAX_RES) -> next_res_id = 1
+                    :: (next_res_id == 255) -> next_res_id = 1
                     :: else -> next_res_id++
                     fi;
                     reserved_by = b;
@@ -50,9 +78,8 @@ proctype Marketplace() {
 
         :: msg == withdraw ->
             if
-            :: (ticket_state == AVAILABLE) ->
-                d_step { ticket_state = WITHDRAWN };
-                seller_ch ! withdraw_ok
+            :: (ticket_state == AVAILABLE && !withdraw_pending) ->
+                d_step { withdraw_pending = true }
             :: else ->
                 seller_ch ! withdraw_fail
             fi
@@ -92,8 +119,11 @@ proctype Marketplace() {
 
         :: msg == deliver ->
             if
-            :: (ticket_state == PAID && !refund_in_flight) ->
-                d_step { ticket_state = DELIVERED };
+            :: (ticket_state == PAID && !refund_in_flight && !refund_done) ->
+                d_step {
+                    ever_delivered = true;
+                    ticket_state = DELIVERED
+                };
                 seller_ch ! deliver_ok
             :: else ->
                 seller_ch ! deliver_fail
@@ -101,7 +131,7 @@ proctype Marketplace() {
 
         :: msg == confirm ->
             if
-            :: (ticket_state == DELIVERED && !payout_in_flight && b == buyer_of_sale && r == current_res_id && r != NO_RES && b < N) ->
+            :: (ticket_state == DELIVERED && !payout_in_flight && !payout_done && b == buyer_of_sale && r == current_res_id && r != NO_RES && b < N) ->
                 d_step {
                     deliveryConfirmed = true;
                     confirmAccepted = true;
@@ -125,9 +155,14 @@ proctype Marketplace() {
             if
             :: (ticket_state == RESERVED && b == reserved_by && r == current_res_id && r != NO_RES) ->
                 d_step {
-                    pending_charges--;
+                    if
+                    :: (pending_charges > 0) -> pending_charges--
+                    :: else -> skip
+                    fi;
                     charge_in_flight = false;
                     buyer_of_sale = b;
+                    ever_paid = true;
+                    sale_count++;
                     ticket_state = PAID
                 };
                 if
@@ -172,7 +207,7 @@ proctype Marketplace() {
             :: (refund_in_flight && ticket_state == PAID && b == buyer_of_sale && r == current_res_id) ->
                 d_step {
                     refund_in_flight = false;
-                    ticket_state = REFUNDED
+                    refund_done = true
                 }
             :: else ->
                 d_step {
@@ -188,12 +223,10 @@ proctype Marketplace() {
             :: (payout_in_flight && ticket_state == DELIVERED && b == buyer_of_sale && r == current_res_id) ->
                 d_step {
                     payout_in_flight = false;
-                    ticket_state = SETTLED
-                };
-                if
-                :: (b < N) -> buyer_ch[b] ! confirm_ok(r)
-                :: else -> skip
-                fi
+                    payout_done = true;
+                    confirm_b = b;
+                    confirm_r = r
+                }
             :: else -> skip
             fi
 
@@ -211,7 +244,7 @@ proctype Marketplace() {
 
     /* Abstract PAID timeout (seller failed to deliver in time) */
     :: d_step {
-        (ticket_state == PAID && !refund_in_flight) ->
+        (ticket_state == PAID && !refund_in_flight && !refund_done) ->
         refund_in_flight = true
     };
     pay_req ! refund(buyer_of_sale, current_res_id)
@@ -232,28 +265,28 @@ end_mkt:
         fi
     od;
 }
-/* === END M1 SECTION === */
+/* === M1 SECTION END: Marketplace === */
 
-/* === M2 SECTION === */
+/* === M2 SECTION START: Participants (Seller & Buyer) === */
 /* TODO (M2): Implement Seller proctype */
 proctype Seller() {
     skip;
 }
 
-/* TODO (M2): Implement Buyer proctype (parameterized by byte id) */
+/* TODO (M2): Implement Buyer proctype (parameterized by byte id, K = 2 retries, Assumption A9) */
 proctype Buyer(byte id) {
     skip;
 }
-/* === END M2 SECTION === */
+/* === M2 SECTION END: Participants (Seller & Buyer) === */
 
-/* === M3 SECTION === */
+/* === M3 SECTION START: PaymentService === */
 /* TODO (M3): Implement PaymentService proctype */
 proctype PaymentService() {
     skip;
 }
-/* === END M3 SECTION === */
+/* === M3 SECTION END: PaymentService === */
 
-/* === M1 SECTION (init) === */
+/* === M1 SECTION START: Init === */
 init {
     byte i = 0;
     atomic {
@@ -268,8 +301,8 @@ init {
         od;
     }
 }
-/* === END M1 SECTION (init) === */
+/* === M1 SECTION END: Init === */
 
-/* === M3 SECTION (LTL) === */
+/* === M3 SECTION START: LTL Specifications (S1-S9, L1-L3) === */
 /* TODO (M3): Add LTL properties S1-S9 (safety) and L1-L3 (liveness) */
-/* === END M3 SECTION (LTL) === */
+/* === M3 SECTION END: LTL Specifications (S1-S9, L1-L3) === */
