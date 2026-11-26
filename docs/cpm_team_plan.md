@@ -12,9 +12,9 @@ Work is partitioned by component so all four members can code, verify, and docum
 
 | Slot | Primary Role | Core Deliverables | Assigned To |
 | :--- | :--- | :--- | :--- |
-| **M1** | **Marketplace & Core State Machine** | Owns the `Marketplace` process, shared `mtype` and channel definitions (`defs.pml`), atomic serialisation (`atomic`/`d_step`), `reserved_by` & `reservation_id` tracking, `buyer_id` authorisation checks, and abstract timeouts (`RESERVED` and `PAID` deadlines). | TBD |
-| **M2** | **Participants (Seller & Buyer Processes)** | Implements `Seller` (withdraw, deliver, non-deterministic non-delivery) and `Buyer(b)` (unique `buyer_id`, bounded retries $K = 2$, pre-`PAID` abandonment, and post-`DELIVERED` confirmation per Assumption A9). | Nhân |
-| **M3** | **Payment Service & LTL Specification** | Implements `PaymentService` and money ledger (`charged`, `held`, `paidOut`, `refunded`), translates S1–S9 and L1–L3 into PROMELA assertions and `ltl` blocks, and assembles the naive buggy model (`01_naive.pml`) for counterexample hunting. | TBD |
+| **M1** | **Marketplace & Core State Machine** | Owns the `Marketplace` process, shared `mtype` and channel definitions (`defs.pml`), atomic serialisation (`atomic`/`d_step`), `reserved_by` & `reservation_id` tracking, `buyer_id` authorisation checks, and abstract timeouts (`RESERVED` and `PAID` deadlines). | Khang |
+| **M2** | **Participants (Seller & Buyer Processes)** | Implements `Seller` (withdraw, deliver, non-deterministic non-delivery) and `Buyer(b)` (unique `buyer_id`, bounded retries $K = 2$, pre-`PAID` abandonment, and post-`DELIVERED` confirmation per Assumption A9). | Uy |
+| **M3** | **Payment Service & LTL Specification** | Implements `PaymentService` and money ledger (`charged`, `held`, `paidOut`, `refunded`), translates S1–S9 and L1–L3 into PROMELA assertions and `ltl` blocks, and assembles the naive buggy model (`01_naive.pml`) for counterexample hunting. | Nhân |
 | **M4** | **SPIN Verification, Scalability & Report Lead** | Maintains `run_checks.sh`, runs SPIN safety and acceptance-cycle (`-a -f`) checks, captures counterexample trails, executes the scalability study (more buyers/listings, `-DCOLLAPSE`/`-DBITSTATE`, partial-order reduction), and compiles the final report and slides. | Kiệt |
 
 ---
