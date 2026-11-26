@@ -11,11 +11,12 @@ This project models and formally verifies a concurrent **Ticket Reservation Syst
   - `1` **Seller**
   - `N >= 2` **Buyers** (each with a unique `buyer_id`)
   - `1` **Marketplace** (central coordinator / state machine)
-  - `1` **Payment Service** (handles charging, escrow/holding, payout, and refunds)
+  - `1` **Payment Service** (atomic integer escrow accounting: `balance[N]`, `escrow`, `seller_bal`; auto-`charge` on `reserve` per FR-6)
 - **Lifecycle States (7 states):**
   `AVAILABLE` → `RESERVED` → `PAID` → `DELIVERED` → `SETTLED` (and terminal branches `WITHDRAWN`, `REFUNDED`)
-- **Confirmation Policy (Assumption A9):**
-  There is no confirmation window timeout; only the winning buyer can confirm delivery under Assumption A9.
+- **Timeout & Confirmation Policy (FR-10, FR-11, Assumption 6):**
+  Active timed states have finite abstract timeouts: `res_timeout` (`RESERVED` → `AVAILABLE`), `delivery_timeout` (`PAID` → `REFUNDED`), and `confirm_timeout` (`DELIVERED` → `SETTLED` auto-confirmation alongside explicit buyer `confirm(b, r)`).
+- **Authoritative Specification:** See [docs/revised_project_proposal.md](docs/revised_project_proposal.md) (`S1`–`S7` safety, `L1`–`L5` liveness).
 
 ---
 
@@ -23,19 +24,19 @@ This project models and formally verifies a concurrent **Ticket Reservation Syst
 
 | Member | Role & Ownership | Primary Files |
 | :--- | :--- | :--- |
-| **M1** | Marketplace process & shared definitions | `models/defs.pml`, Marketplace proctype in `01_naive.pml` / `02_final.pml` |
-| **M2** | Seller & Buyer processes (`N >= 2` concurrent buyers) | Seller & Buyer proctypes in `01_naive.pml` / `02_final.pml` |
-| **M3** | PaymentService process & LTL properties (`S1`–`S9`, `L1`–`L3`) | PaymentService proctype & `ltl` blocks in `models/` |
+| **M1** | Marketplace process & shared definitions | `models/defs.pml`, Marketplace proctype in `02_final.pml` |
+| **M2** | Seller & Buyer processes (`N >= 2` concurrent buyers, `K = 2` attempts) | Seller & Buyer proctypes in `02_final.pml` |
+| **M3** | PaymentService process, LTL (`S1`–`S7`, `L1`–`L5`) & naive buggy model | `models/defs.pml`, `01_naive.pml`, PaymentService & `ltl` in `02_final.pml` |
 | **M4** | SPIN verification, counterexample trails, scalability & report | `scripts/run_checks.sh`, `trails/`, `results/metrics.csv`, `docs/` |
 
 ---
 
 ## 5-Day Sprint Git Workflow
 
-1. **Freeze `models/defs.pml` first:** Agree on `mtype` values, channel signatures, and ghost variables before parallelizing process implementations.
+1. **Freeze `models/defs.pml` first:** Agree on `mtype` values, channel signatures, integer escrow variables, and ghost variables before parallelizing process implementations.
 2. **Keep models separate:**
-   - `models/01_naive.pml` — Initial naive model (used to demonstrate concurrency bugs and capture counterexamples in `trails/`).
-   - `models/02_final.pml` — Corrected model that satisfies all safety (`S1`–`S9`) and liveness (`L1`–`L3`) specifications.
+   - `models/01_naive.pml` — Initial naive model (used to demonstrate concurrency bugs and capture counterexamples for `S1`, `S4`, `S5`, `S7` in `trails/`).
+   - `models/02_final.pml` — Corrected model that satisfies all safety (`S1`–`S7`) and liveness (`L1`–`L5`) specifications.
 3. **Feature branches only:** Develop on dedicated branches (`feat/marketplace`, `feat/participants`, `feat/payment-ltl`, `feat/verification`) and open PRs into `main`.
 4. **Gate `main` with `run_checks.sh`:** Never push or merge directly to `main` without passing `./scripts/run_checks.sh`.
 
@@ -72,14 +73,15 @@ spin -p -g -l models/02_final.pml
 ```powershell
 spin -a models/02_final.pml
 gcc -O2 -DSAFETY -o pan.exe pan.c
-.\pan.exe -E
+.\pan.exe
+.\pan.exe -N S1   # Repeat for S1..S7
 ```
 
 ### 3. Liveness Verification (PowerShell, Weak Fairness `-a -f`)
 ```powershell
 spin -a models/02_final.pml
 gcc -O2 -o pan.exe pan.c
-.\pan.exe -a -f -N L1
+.\pan.exe -a -f -N L1   # Repeat for L1..L5
 ```
 
 ### 4. Automated Check & Metrics Logging (Git Bash)
