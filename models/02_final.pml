@@ -8,75 +8,30 @@
 #include "defs.pml"
 
 /* === M1 SECTION START: Marketplace === */
-/* TODO (M1): Implement hardened Marketplace proctype with:
- *   - atomic/d_step serialisation
- *   - current_res_id & b == reserved_by / b == buyer_of_sale guards
- *   - reset cancelAccepted = false on AVAILABLE -> RESERVED
- *   - stale charge_ok -> pay_req ! refund(b, r) without mutating active sale
- *   - drain in-flight charges before entering terminal states (held_cnt == 0)
- *   - abstract RESERVED and PAID timeout branches
- */
 proctype Marketplace() {
     mtype:msg msg;
-    byte b, r;
-    bool charge_in_flight = false;
-    bool withdraw_pending = false;
-    bool refund_in_flight = false;
-    bool refund_done = false;
-    bool payout_in_flight = false;
-    bool payout_done = false;
-    byte pending_charges = 0;
-    byte pending_stale_refunds = 0;
-    byte confirm_b = NO_BUYER;
-    byte confirm_r = NO_RES;
+    byte b, r, assigned_r;
 
-    /* Phase 1: Active ticket lifecycle & stale-operation drain before terminal state */
+    /* Phase 1: Active ticket lifecycle (FR-1..FR-11, Assumption 6) */
     do
     :: is_terminal ->
         break
 
-    /* Complete terminal transitions only after stale charges/refunds drain (guarantees S8 held_cnt == 0) */
-    :: (withdraw_pending && pending_charges == 0 && pending_stale_refunds == 0) ->
-        d_step {
-            withdraw_pending = false;
-            ticket_state = WITHDRAWN
-        };
-        seller_ch ! withdraw_ok
-
-    :: (payout_done && pending_charges == 0 && pending_stale_refunds == 0) ->
-        d_step {
-            payout_done = false;
-            ticket_state = SETTLED
-        };
-        if
-        :: (confirm_b < N) -> buyer_ch[confirm_b] ! confirm_ok(confirm_r)
-        :: else -> skip
-        fi
-
-    :: (refund_done && pending_charges == 0 && pending_stale_refunds == 0) ->
-        d_step {
-            refund_done = false;
-            sale_refunded = true;
-            ticket_state = REFUNDED
-        }
-
-    :: mkt_req ? msg, b, r ->
+    :: (nfull(pay_req) && nempty(mkt_req)) ->
+        mkt_req ? msg, b, r;
         if
         :: msg == reserve ->
             if
-            :: (ticket_state == AVAILABLE && !withdraw_pending && b < N) ->
+            :: (ticket_state == AVAILABLE && b < N && next_res_id < MAX_RES_ID) ->
                 d_step {
-                    current_res_id = next_res_id;
-                    if
-                    :: (next_res_id == 255) -> next_res_id = 1
-                    :: else -> next_res_id++
-                    fi;
-                    reserved_by = b;
-                    cancelAccepted = false;
-                    charge_in_flight = false;
+                    assigned_r = next_res_id;
+                    current_res_id = assigned_r;
+                    next_res_id++;
+                    current_buyer = b;
                     ticket_state = RESERVED
                 };
-                buyer_ch[b] ! reserve_ok(current_res_id)
+                buyer_ch[b] ! reserve_ok(assigned_r);
+                pay_req ! charge(b, assigned_r)
             :: else ->
                 if
                 :: (b < N) -> buyer_ch[b] ! reserve_fail(NO_RES)
@@ -86,35 +41,19 @@ proctype Marketplace() {
 
         :: msg == withdraw ->
             if
-            :: (ticket_state == AVAILABLE && !withdraw_pending) ->
-                d_step { withdraw_pending = true }
+            :: (ticket_state == AVAILABLE) ->
+                d_step { ticket_state = WITHDRAWN };
+                seller_ch ! withdraw_ok
             :: else ->
                 seller_ch ! withdraw_fail
             fi
 
-        :: msg == pay ->
-            if
-            :: (ticket_state == RESERVED && b == reserved_by && r == current_res_id && r != NO_RES && !charge_in_flight && b < N) ->
-                d_step {
-                    charge_in_flight = true;
-                    pending_charges++
-                };
-                pay_req ! charge(b, r)
-            :: else ->
-                if
-                :: (b < N) -> buyer_ch[b] ! pay_fail(r)
-                :: else -> skip
-                fi
-            fi
-
         :: msg == cancel ->
             if
-            :: (ticket_state == RESERVED && b == reserved_by && r == current_res_id && r != NO_RES && b < N) ->
+            :: (ticket_state == RESERVED && b == current_buyer && r == current_res_id && r != NO_RES && b < N) ->
                 d_step {
-                    cancelAccepted = true;
-                    reserved_by = NO_BUYER;
+                    current_buyer = NO_BUYER;
                     current_res_id = NO_RES;
-                    charge_in_flight = false;
                     ticket_state = AVAILABLE
                 };
                 buyer_ch[b] ! cancel_ok(r)
@@ -127,7 +66,7 @@ proctype Marketplace() {
 
         :: msg == deliver ->
             if
-            :: (ticket_state == PAID && !refund_in_flight && !refund_done) ->
+            :: (ticket_state == PAID) ->
                 d_step {
                     ever_delivered = true;
                     ticket_state = DELIVERED
@@ -139,14 +78,13 @@ proctype Marketplace() {
 
         :: msg == confirm ->
             if
-            :: (ticket_state == DELIVERED && !payout_in_flight && !payout_done && b == buyer_of_sale && r == current_res_id && r != NO_RES && b < N) ->
+            :: (ticket_state == DELIVERED && b == current_buyer && r == current_res_id && r != NO_RES && b < N) ->
                 d_step {
                     deliveryConfirmed = true;
-                    confirmAccepted = true;
-                    confirmed_by = b;
-                    payout_in_flight = true
+                    ticket_state = SETTLED
                 };
-                pay_req ! payout(b, r)
+                pay_req ! payout(b, r);
+                buyer_ch[b] ! confirm_ok(r)
             :: else ->
                 if
                 :: (b < N) -> buyer_ch[b] ! confirm_fail(r)
@@ -161,114 +99,104 @@ proctype Marketplace() {
         if
         :: msg == charge_ok ->
             if
-            :: (ticket_state == RESERVED && b == reserved_by && r == current_res_id && r != NO_RES) ->
+            :: (ticket_state == RESERVED && b == current_buyer && r == current_res_id && r != NO_RES) ->
                 d_step {
-                    if
-                    :: (pending_charges > 0) -> pending_charges--
-                    :: else -> skip
-                    fi;
-                    charge_in_flight = false;
-                    buyer_of_sale = b;
                     ever_paid = true;
                     sale_count++;
+                    sale_buyer = b;
+                    sale_res_id = r;
                     ticket_state = PAID
-                };
-                if
-                :: (b < N) -> buyer_ch[b] ! pay_ok(r)
-                :: else -> skip
-                fi
+                }
             :: else ->
-                /* Stale charge_ok after timeout or cancellation: refund without mutating active sale */
-                d_step {
-                    if
-                    :: (pending_charges > 0) -> pending_charges--
-                    :: else -> skip
-                    fi;
-                    pending_stale_refunds++
-                };
-                pay_req ! refund(b, r);
-                if
-                :: (b < N) -> buyer_ch[b] ! pay_fail(r)
-                :: else -> skip
-                fi
+                /* FR-9 / S4 / L4: Stale charge_ok triggers refund without mutating listing state */
+                d_step { stale_refund_pending++ };
+                pay_req ! refund(b, r)
             fi
 
         :: msg == charge_fail ->
-            d_step {
-                if
-                :: (pending_charges > 0) -> pending_charges--
-                :: else -> skip
-                fi;
-                if
-                :: (ticket_state == RESERVED && b == reserved_by && r == current_res_id) ->
-                    charge_in_flight = false
-                :: else -> skip
-                fi
-            };
+            /* FR-8(a): Matching charge_fail releases active reservation back to AVAILABLE */
             if
-            :: (b < N) -> buyer_ch[b] ! pay_fail(r)
+            :: (ticket_state == RESERVED && b == current_buyer && r == current_res_id && r != NO_RES) ->
+                d_step {
+                    current_buyer = NO_BUYER;
+                    current_res_id = NO_RES;
+                    ticket_state = AVAILABLE
+                }
             :: else -> skip
             fi
 
         :: msg == refund_ok ->
             if
-            :: (refund_in_flight && ticket_state == PAID && b == buyer_of_sale && r == current_res_id) ->
-                d_step {
-                    refund_in_flight = false;
-                    refund_done = true
-                }
-            :: else ->
+            :: (r != sale_res_id) ->
                 d_step {
                     if
-                    :: (pending_stale_refunds > 0) -> pending_stale_refunds--
+                    :: (stale_refund_pending > 0) -> stale_refund_pending--
                     :: else -> skip
                     fi
-                }
-            fi
-
-        :: msg == payout_ok ->
-            if
-            :: (payout_in_flight && ticket_state == DELIVERED && b == buyer_of_sale && r == current_res_id) ->
-                d_step {
-                    payout_in_flight = false;
-                    payout_done = true;
-                    confirm_b = b;
-                    confirm_r = r
                 }
             :: else -> skip
             fi
 
+        :: msg == payout_ok ->
+            skip
+
         :: else -> skip
         fi
 
-    /* Abstract RESERVED timeout (buyer walked away or reservation expired) */
+    /* FR-8(c): Abstract res_timeout (RESERVED -> AVAILABLE) */
     :: d_step {
         (ticket_state == RESERVED) ->
-        reserved_by = NO_BUYER;
+        current_buyer = NO_BUYER;
         current_res_id = NO_RES;
-        charge_in_flight = false;
         ticket_state = AVAILABLE
     }
 
-    /* Abstract PAID timeout (seller failed to deliver in time) */
-    :: d_step {
-        (ticket_state == PAID && !refund_in_flight && !refund_done) ->
-        refund_in_flight = true
-    };
-    pay_req ! refund(buyer_of_sale, current_res_id)
+    /* FR-10(b): Abstract delivery_timeout (PAID -> REFUNDED) */
+    :: (ticket_state == PAID && nfull(pay_req)) ->
+        d_step {
+            delivery_timed_out = true;
+            ticket_state = REFUNDED
+        };
+        pay_req ! refund(current_buyer, current_res_id)
+
+    /* FR-11(b), Assumption 6: Abstract confirm_timeout (DELIVERED -> SETTLED) */
+    :: (ticket_state == DELIVERED && nfull(pay_req)) ->
+        d_step {
+            deliveryConfirmed = true;
+            ticket_state = SETTLED
+        };
+        pay_req ! payout(current_buyer, current_res_id)
     od;
 
-    /* Phase 2: Terminal drain loop (reject late requests cleanly without deadlocking participants) */
+    /* Phase 2: Terminal drain loop (reject late user commands & refund late stale charges per L3/L4) */
 end_mkt:
     do
     :: mkt_req ? msg, b, r ->
         if
         :: (msg == reserve && b < N) -> buyer_ch[b] ! reserve_fail(NO_RES)
-        :: (msg == pay && b < N)     -> buyer_ch[b] ! pay_fail(r)
         :: (msg == cancel && b < N)  -> buyer_ch[b] ! cancel_fail(r)
         :: (msg == confirm && b < N) -> buyer_ch[b] ! confirm_fail(r)
         :: (msg == withdraw)         -> seller_ch ! withdraw_fail
         :: (msg == deliver)          -> seller_ch ! deliver_fail
+        :: else -> skip
+        fi
+
+    :: pay_resp ? msg, b, r ->
+        if
+        :: msg == charge_ok ->
+            d_step { stale_refund_pending++ };
+            pay_req ! refund(b, r)
+        :: msg == refund_ok ->
+            if
+            :: (r != sale_res_id) ->
+                d_step {
+                    if
+                    :: (stale_refund_pending > 0) -> stale_refund_pending--
+                    :: else -> skip
+                    fi
+                }
+            :: else -> skip
+            fi
         :: else -> skip
         fi
     od;
