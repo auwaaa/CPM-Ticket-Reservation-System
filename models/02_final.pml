@@ -13,8 +13,8 @@
  *     made explicit, which removes meaningless interleavings;
  *   - msg = 0; b = 0; r = 0 at the end of a handler: clears dead locals so
  *     that states differing only in "last message seen" are merged.
- * The M2 section is a contract-compliant REFERENCE Seller/Buyer written by M3
- * so the model can be verified end-to-end; M2 owns it and may replace it.
+ * The M2 section (`Seller` & `Buyer`) follows the v2 contract in
+ * docs/temp_role_execution_plan.md §4.1 (reviewed & signed off by M2: Uy).
  */
 
 #include "defs.pml"
@@ -237,11 +237,11 @@ end_mkt:
 
 /* === M2 SECTION START: Participants (Seller & Buyer) === */
 /*
- * REFERENCE IMPLEMENTATION by M3, written to the M2 contract in
- * docs/temp_role_execution_plan.md §4.1 so S1-S7 / L1-L5 can be verified
- * end-to-end. M2 (Uy) owns this section and may refine or replace it.
- * 01_naive.pml uses the identical Seller/Buyer, so the naive and the hardened
- * model differ ONLY in Marketplace and PaymentService.
+ * M2 Participants (Seller & Buyer) — Owner: Pham Khac Uy (M2, 10423122)
+ * Initial reference skeleton drafted by M3 to §4.1 contract for end-to-end
+ * verification; reviewed, verified, and documented by M2 in
+ * docs/m2_participants_and_assumptions.md. Kept identical to 01_naive.pml
+ * so the naive and hardened models differ ONLY in Marketplace & PaymentService.
  *
  * Design rules:
  *  - every command is immediately followed by reading its 1-to-1 reply (FR-3);
