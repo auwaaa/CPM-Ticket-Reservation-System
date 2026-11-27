@@ -157,7 +157,7 @@ The SPIN runner script automates the full verification lifecycle in six stages:
    * Performs acceptance-cycle search under weak fairness (Assumptions 4 and 6).
 4. **`capture_trail()` [on error]**
    * Saves generated `*.trail` files to `trails/<model>_<prop>.trail`.
-   * Supports trace replay via `spin -t trails/<model>_<prop>.trail -p -g -l <file.pml>`.
+   * Supports trace replay via `spin -t -k trails/<model>_<prop>.trail -p -g -l <file.pml>`.
 5. **`log_metrics()`**
    * Parses SPIN stdout (errors, states stored, transitions, memory in MB, runtime in seconds).
    * Appends structured results to `results/metrics.csv`.
@@ -175,7 +175,7 @@ The SPIN runner script automates the full verification lifecycle in six stages:
 * **Saved Files:** `01_naive_S1.trail`, `01_naive_S4.trail`, `01_naive_S5.trail`, `01_naive_S7.trail` (counterexample traces captured from `01_naive.pml`).
 * **Replay Command:**
   ```powershell
-  spin -t trails/01_naive_S4.trail -p -g -l models/01_naive.pml
+  spin -t -k trails/01_naive_S4.trail -p -g -l models/01_naive.pml
   ```
 * **Usage:** Used for debugging, report documentation, and live demo walkthroughs.
 

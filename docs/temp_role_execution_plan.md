@@ -321,7 +321,7 @@ Update [`models/01_naive.pml`](../models/01_naive.pml) to the v2 auto-charge pro
 
 ### 6.3 Acceptance Criteria (Definition of Done)
 - [ ] `scripts/run_checks.sh` enforces deadlock freedom (no `-E`), checks `S1`–`S7` and `L1`–`L5`, captures trails to `trails/`, and logs rows to `results/metrics.csv`.
-- [ ] All 4 naive counterexample trails (`S1`, `S4`, `S5`, `S7`) are saved in `trails/` and replay cleanly via `spin -t trails/01_naive_<prop>.trail -p -g -l models/01_naive.pml`.
+- [ ] All 4 naive counterexample trails (`S1`, `S4`, `S5`, `S7`) are saved in `trails/` and replay cleanly via `spin -t -k trails/01_naive_<prop>.trail -p -g -l models/01_naive.pml`.
 - [ ] `02_final.pml` passes `S1`–`S7` and `L1`–`L5` (`-a -f`) with `errors: 0`.
 - [ ] `results/metrics.csv` contains complete baseline and scalability metrics (`N=2,3,4`, `K`, 2 listings, `-DCOLLAPSE`, `-DBITSTATE`, POR comparison).
 

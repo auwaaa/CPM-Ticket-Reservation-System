@@ -91,5 +91,5 @@ gcc -O2 -o pan.exe pan.c
 
 ### 5. Replay a Saved Counterexample Trail (PowerShell)
 ```powershell
-spin -t trails/<example>.trail -p -g -l models/01_naive.pml
+spin -t -k trails/<example>.trail -p -g -l models/01_naive.pml
 ```

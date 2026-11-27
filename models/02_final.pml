@@ -1,8 +1,20 @@
 /*
- * 02_final.pml - Verified model of the Ticket Reservation System
- * Must satisfy all safety properties (S1-S9) and liveness properties (L1-L3).
+ * 02_final.pml - Hardened model of the Ticket Reservation System
+ * Must satisfy all safety properties (S1-S7), deadlock freedom, and
+ * liveness properties (L1-L5) of docs/revised_project_proposal.md.
  *
- * File Organization: Option A (Single-file section markers per team agreement)
+ * File Organization: Option A (single-file section markers per team agreement)
+ *
+ * Lines tagged [M3] inside M1's section were added by M3 and do not change
+ * the protocol logic:
+ *   - OBS_* calls: ghost observers (they only write violation_* ghosts);
+ *   - atomic { ... } around each message handler: Assumption 3 / FR-2
+ *     ("the marketplace handles one message to completion before the next")
+ *     made explicit, which removes meaningless interleavings;
+ *   - msg = 0; b = 0; r = 0 at the end of a handler: clears dead locals so
+ *     that states differing only in "last message seen" are merged.
+ * The M2 section is a contract-compliant REFERENCE Seller/Buyer written by M3
+ * so the model can be verified end-to-end; M2 owns it and may replace it.
  */
 
 #include "defs.pml"
@@ -12,18 +24,23 @@ proctype Marketplace() {
     mtype:msg msg;
     byte b, r, assigned_r;
 
-    /* Phase 1: Active ticket lifecycle (FR-1..FR-11, Assumption 6) */
+    /* Phase 1: Active ticket lifecycle (FR-1..FR-11, Assumption 6).
+     * end_active [M3]: an unsold listing with no pending work (buyers out of
+     * attempts, seller idle) is a legitimate quiescent state, not a deadlock. */
+end_active:
     do
     :: is_terminal ->
         break
 
-    :: (nfull(pay_req) && nempty(mkt_req)) ->
+    /* ---- user commands ---- */
+    :: atomic { (nfull(pay_req) && nempty(mkt_req)) ->            /* [M3] atomic */
         mkt_req ? msg, b, r;
         if
         :: msg == reserve ->
             if
             :: (ticket_state == AVAILABLE && b < N && next_res_id < MAX_RES_ID) ->
                 d_step {
+                    OBS_RESERVE_GRANT();                            /* [M3] S2 observer */
                     assigned_r = next_res_id;
                     current_res_id = assigned_r;
                     next_res_id++;
@@ -42,7 +59,10 @@ proctype Marketplace() {
         :: msg == withdraw ->
             if
             :: (ticket_state == AVAILABLE) ->
-                d_step { ticket_state = WITHDRAWN };
+                d_step {
+                    OBS_WITHDRAW();                                 /* [M3] S3 observer */
+                    ticket_state = WITHDRAWN
+                };
                 seller_ch ! withdraw_ok
             :: else ->
                 seller_ch ! withdraw_fail
@@ -93,14 +113,18 @@ proctype Marketplace() {
             fi
 
         :: else -> skip
-        fi
+        fi;
+        msg = 0; b = 0; r = 0; assigned_r = 0                       /* [M3] clear dead locals */
+       }
 
-    :: pay_resp ? msg, b, r ->
+    /* ---- payment results ---- */
+    :: atomic { pay_resp ? msg, b, r ->                              /* [M3] atomic */
         if
         :: msg == charge_ok ->
             if
             :: (ticket_state == RESERVED && b == current_buyer && r == current_res_id && r != NO_RES) ->
                 d_step {
+                    OBS_CHARGE_ACCEPT(b, r);                        /* [M3] S4 observer */
                     ever_paid = true;
                     sale_count++;
                     sale_buyer = b;
@@ -141,7 +165,9 @@ proctype Marketplace() {
             skip
 
         :: else -> skip
-        fi
+        fi;
+        msg = 0; b = 0; r = 0                                       /* [M3] clear dead locals */
+       }
 
     /* FR-8(c): Abstract res_timeout (RESERVED -> AVAILABLE) */
     :: d_step {
@@ -152,26 +178,28 @@ proctype Marketplace() {
     }
 
     /* FR-10(b): Abstract delivery_timeout (PAID -> REFUNDED) */
-    :: (ticket_state == PAID && nfull(pay_req)) ->
+    :: atomic { (ticket_state == PAID && nfull(pay_req)) ->          /* [M3] atomic */
         d_step {
             delivery_timed_out = true;
             ticket_state = REFUNDED
         };
         pay_req ! refund(current_buyer, current_res_id)
+       }
 
     /* FR-11(b), Assumption 6: Abstract confirm_timeout (DELIVERED -> SETTLED) */
-    :: (ticket_state == DELIVERED && nfull(pay_req)) ->
+    :: atomic { (ticket_state == DELIVERED && nfull(pay_req)) ->     /* [M3] atomic */
         d_step {
             deliveryConfirmed = true;
             ticket_state = SETTLED
         };
         pay_req ! payout(current_buyer, current_res_id)
+       }
     od;
 
     /* Phase 2: Terminal drain loop (reject late user commands & refund late stale charges per L3/L4) */
 end_mkt:
     do
-    :: mkt_req ? msg, b, r ->
+    :: atomic { mkt_req ? msg, b, r ->                               /* [M3] atomic */
         if
         :: (msg == reserve && b < N) -> buyer_ch[b] ! reserve_fail(NO_RES)
         :: (msg == cancel && b < N)  -> buyer_ch[b] ! cancel_fail(r)
@@ -179,9 +207,11 @@ end_mkt:
         :: (msg == withdraw)         -> seller_ch ! withdraw_fail
         :: (msg == deliver)          -> seller_ch ! deliver_fail
         :: else -> skip
-        fi
+        fi;
+        msg = 0; b = 0; r = 0                                       /* [M3] clear dead locals */
+       }
 
-    :: pay_resp ? msg, b, r ->
+    :: atomic { pay_resp ? msg, b, r ->                              /* [M3] atomic */
         if
         :: msg == charge_ok ->
             d_step { stale_refund_pending++ };
@@ -198,64 +228,193 @@ end_mkt:
             :: else -> skip
             fi
         :: else -> skip
-        fi
+        fi;
+        msg = 0; b = 0; r = 0                                       /* [M3] clear dead locals */
+       }
     od;
 }
 /* === M1 SECTION END: Marketplace === */
 
 /* === M2 SECTION START: Participants (Seller & Buyer) === */
-/* TODO (M2): Implement Seller proctype */
+/*
+ * REFERENCE IMPLEMENTATION by M3, written to the M2 contract in
+ * docs/temp_role_execution_plan.md §4.1 so S1-S7 / L1-L5 can be verified
+ * end-to-end. M2 (Uy) owns this section and may refine or replace it.
+ * 01_naive.pml uses the identical Seller/Buyer, so the naive and the hardened
+ * model differ ONLY in Marketplace and PaymentService.
+ *
+ * Design rules:
+ *  - every command is immediately followed by reading its 1-to-1 reply (FR-3);
+ *  - each "decide -> send -> await reply" step is one atomic action of the
+ *    participant (it blocks inside the atomic until the reply arrives, which
+ *    lets the other processes run in the meantime);
+ *  - every non-deterministic choice is made once (bounded by flags), so there
+ *    are no busy-wait `skip` loops that could hide liveness violations;
+ *  - an idle participant blocks at an end-label, which is a valid end state.
+ *    There is deliberately no `:: is_terminal -> break`: every guard is false
+ *    once the listing is terminal, so participants stop cleanly anyway, and
+ *    the N+1 possible orders of "who exits first" are not explored (this
+ *    alone cut the N=2, K=2 state space from 20.0 M to 12.4 M states);
+ *  - a buyer only tries to reserve when it sees the listing AVAILABLE, and
+ *    only spoofs while ANOTHER buyer holds the listing (the only moment a
+ *    spoof can do harm). Both keep the FR-4 race and the ABA scenario while
+ *    pruning interleavings that can only be rejected.
+ */
+#define SELLER_ID 0   /* sender_id field is unused for seller commands */
+
 proctype Seller() {
-    skip;
+    mtype:msg reply;
+    bool withdraw_tried  = false;
+    bool deliver_decided = false;
+
+end_seller:
+    do
+    /* FR-5: optionally withdraw while AVAILABLE (may race with a reserve) */
+    :: atomic { (ticket_state == AVAILABLE && !withdraw_tried) ->
+        withdraw_tried = true;
+        mkt_req ! withdraw(SELLER_ID, NO_RES);
+        seller_ch ? reply;
+        reply = 0
+       }
+
+    /* FR-10: in PAID, either deliver (races with delivery_timeout) or never deliver */
+    :: atomic { (ticket_state == PAID && !deliver_decided) ->
+        deliver_decided = true;
+        if
+        :: mkt_req ! deliver(SELLER_ID, NO_RES);
+           seller_ch ? reply;
+           reply = 0
+        :: skip    /* non-delivery: delivery_timeout must refund the buyer (L2) */
+        fi
+       }
+    od
 }
 
-/* TODO (M2): Implement Buyer proctype (parameterized by byte id, K = 2 retries, Assumption A9) */
 proctype Buyer(byte id) {
-    skip;
+    mtype:msg reply;
+    byte attempts = 0;          /* FR-12: at most K reservation attempts */
+    byte my_res   = NO_RES;     /* latest reservation id granted to this buyer */
+    byte tmp_r    = NO_RES;
+    bool confirm_decided = false;
+    bool spoofed  = false;
+
+end_buyer:
+    do
+    /* FR-4 / FR-6: reserve; the Marketplace auto-charges on accept (no `pay` command) */
+    :: atomic { (attempts < K && ticket_state == AVAILABLE) ->
+        attempts++;
+        mkt_req ! reserve(id, NO_RES);
+        buyer_ch[id] ? reply, tmp_r;
+        if
+        :: reply == reserve_ok ->
+            my_res = tmp_r;
+            if
+            :: mkt_req ! cancel(id, my_res);    /* FR-8(b): races with charge result / res_timeout */
+               buyer_ch[id] ? reply, tmp_r
+            :: skip                            /* wait or abandon: charge / res_timeout resolve it */
+            fi
+        :: else -> skip                        /* reserve_fail: lost the race */
+        fi;
+        reply = 0; tmp_r = 0
+       }
+
+    /* FR-11: the winning buyer either confirms explicitly or stays silent (confirm_timeout) */
+    :: atomic { (ticket_state == DELIVERED && current_buyer == id && !confirm_decided) ->
+        confirm_decided = true;
+        if
+        :: mkt_req ! confirm(id, my_res);
+           buyer_ch[id] ? reply, tmp_r
+        :: skip
+        fi;
+        reply = 0; tmp_r = 0
+       }
+
+    /* Spoofed / stale request, at most once per buyer: must be rejected without effect */
+    :: atomic { (!spoofed && current_buyer != id && current_buyer != NO_BUYER && !is_terminal) ->
+        spoofed = true;
+        if
+        :: mkt_req ! cancel(id, 1);  buyer_ch[id] ? reply, tmp_r
+        :: mkt_req ! confirm(id, 1); buyer_ch[id] ? reply, tmp_r
+        fi;
+        reply = 0; tmp_r = 0
+       }
+    od
 }
 /* === M2 SECTION END: Participants (Seller & Buyer) === */
 
 /* === M3 SECTION START: PaymentService === */
-/* TODO (M3): Implement PaymentService proctype */
+/*
+ * Atomic integer escrow ledger (Assumption 7) with per-charge single
+ * settlement (S6). Every ledger mutation is one d_step, so no process and no
+ * never claim can observe a half-done transfer (S7 holds in EVERY state).
+ *
+ *   charge(b, r) : balance[b] -1, escrow +1, charge_status[r]: NONE -> HELD
+ *                  (or a non-deterministic decline -> charge_fail)
+ *   payout(b, r) : escrow -1, seller_bal +1,     charge_status[r]: HELD -> PAID_OUT
+ *   refund(b, r) : escrow -1, balance[b] +1,     charge_status[r]: HELD -> REFUNDED
+ *
+ * A payout/refund whose charge is not HELD (never charged, declined, or
+ * already settled) moves NO money: it is rejected and recorded in the
+ * violation_dup_settlement ghost, so S6 reports the protocol error.
+ * A refund must name the buyer who was actually charged for r (checked
+ * against charge_payer[r]), so money can never be refunded to someone else.
+ */
 proctype PaymentService() {
     mtype:msg cmd;
-    byte b;
-    byte r;
+    byte b, r;
 
 end_payment:
     do
-    :: pay_req ? cmd, b, r ->
+    :: atomic { pay_req ? cmd, b, r ->
         if
         :: cmd == charge ->
-            /* Non-deterministic payment gateway outcome: charge succeeds or fails */
             if
-            :: atomic {
-                   charged_cnt++;
-                   held_cnt++;
-                   assert(charged_cnt == held_cnt + paidOut_cnt + refunded_cnt);
-               }
-               pay_resp ! charge_ok(b, r)
-            :: pay_resp ! charge_fail(b, r)
+            :: (b < N && r > NO_RES && r < MAX_RES_ID && charge_status[r] == CHG_NONE && balance[b] >= 1) ->
+                d_step {
+                    balance[b]--;
+                    escrow++;
+                    charge_status[r] = CHG_HELD;
+                    charge_payer[r] = b;
+                    assert(LEDGER_OK)
+                };
+                pay_resp ! charge_ok(b, r)
+            :: pay_resp ! charge_fail(b, r)        /* gateway declines (Assumption 4: always answers) */
             fi
+
         :: cmd == payout ->
-            atomic {
-                assert(held_cnt > 0);
-                held_cnt--;
-                paidOut_cnt++;
-                assert(charged_cnt == held_cnt + paidOut_cnt + refunded_cnt);
-            }
-            pay_resp ! payout_ok(b, r)
+            if
+            :: (r > NO_RES && r < MAX_RES_ID && charge_status[r] == CHG_HELD) ->
+                d_step {
+                    escrow--;
+                    seller_bal++;
+                    charge_status[r] = CHG_PAID_OUT;
+                    payout_res = r;
+                    assert(LEDGER_OK)
+                };
+                pay_resp ! payout_ok(b, r)
+            :: else ->
+                violation_dup_settlement = true     /* rejected: unbacked or duplicate payout */
+            fi
+
         :: cmd == refund ->
-            atomic {
-                assert(held_cnt > 0);
-                held_cnt--;
-                refunded_cnt++;
-                assert(charged_cnt == held_cnt + paidOut_cnt + refunded_cnt);
-            }
-            pay_resp ! refund_ok(b, r)
+            if
+            :: (b < N && r > NO_RES && r < MAX_RES_ID && charge_status[r] == CHG_HELD && charge_payer[r] == b) ->
+                d_step {
+                    escrow--;
+                    balance[b]++;
+                    charge_status[r] = CHG_REFUNDED;
+                    assert(LEDGER_OK)
+                };
+                pay_resp ! refund_ok(b, r)
+            :: else ->
+                violation_dup_settlement = true     /* rejected: unbacked, duplicate or misdirected refund */
+            fi
+
         :: else ->
-            assert(false)
-        fi
+            assert(false)                           /* only charge/payout/refund travel on pay_req */
+        fi;
+        cmd = 0; b = 0; r = 0                       /* clear dead locals */
+       }
     od
 }
 /* === M3 SECTION END: PaymentService === */
@@ -277,99 +436,6 @@ init {
 }
 /* === M1 SECTION END: Init === */
 
-/* === M3 SECTION START: LTL Specifications (S1-S9, L1-L3) === */
-/* TODO (M3): Add LTL properties S1-S9 (safety) and L1-L3 (liveness) */
-
-/* === M3 SECTION START: LTL Specifications (S1-S9, L1-L3) === */
-/* Note: No X (next-state) operator is used so SPIN Partial-Order Reduction stays active. */
-
-/* S1: No double-sale / single winning buyer */
-ltl S1 {
-    [] (
-        (sale_count <= 1) &&
-        (ticket_state == SETTLED -> (buyer_of_sale != NO_BUYER && confirmed_by == buyer_of_sale))
-    )
-}
-
-/* S2: Payment precedes delivery and settlement */
-ltl S2 {
-    [] (
-        (ticket_state == DELIVERED -> ever_paid) &&
-        (ticket_state == SETTLED -> (ever_paid && ever_delivered && deliveryConfirmed))
-    )
-}
-
-/* S3: Terminal state immutability (no transition out of SETTLED, WITHDRAWN, or REFUNDED) */
-ltl S3 {
-    [] (
-        (ticket_state == SETTLED   -> [] (ticket_state == SETTLED)) &&
-        (ticket_state == WITHDRAWN -> [] (ticket_state == WITHDRAWN)) &&
-        (ticket_state == REFUNDED  -> [] (ticket_state == REFUNDED))
-    )
-}
-
-/* S4: Withdrawal safety (cannot withdraw after reservation ownership or payment) */
-ltl S4 {
-    [] (
-        ticket_state == WITHDRAWN ->
-            (!ever_paid && !ever_delivered && reserved_by == NO_BUYER && buyer_of_sale == NO_BUYER)
-    )
-}
-
-/* S5: Cancel vs. Confirm mutual exclusion and no cancel after payment */
-ltl S5 {
-    [] (
-        !(cancelAccepted && confirmAccepted) &&
-        (ever_paid -> !cancelAccepted)
-    )
-}
-
-/* S6: Payout vs. active-sale refund mutual exclusion (allows prior stale-charge refunds) */
-ltl S6 {
-    [] (
-        (paidOut_cnt <= 1) &&
-        (ticket_state == SETTLED  -> (paidOut_cnt == 1 && !sale_refunded)) &&
-        (ticket_state == REFUNDED -> (paidOut_cnt == 0 && sale_refunded))
-    )
-}
-
-/* S7: Escrow hold invariant (no payout/refund without prior charge; active sale backed by charge) */
-ltl S7 {
-    [] (
-        (paidOut_cnt + refunded_cnt <= charged_cnt) &&
-        (held_cnt <= charged_cnt) &&
-        ((ticket_state == PAID || ticket_state == DELIVERED) -> charged_cnt >= 1)
-    )
-}
-
-/* S8: Money conservation & no unrefunded stale charge at terminal state */
-ltl S8 {
-    [] (
-        (charged_cnt == held_cnt + paidOut_cnt + refunded_cnt) &&
-        (is_terminal -> held_cnt == 0)
-    )
-}
-
-/* S9: Buyer authorization (only buyer_of_sale can confirm; paid/delivered/settled have valid owner) */
-ltl S9 {
-    [] (
-        (confirmAccepted -> (confirmed_by == buyer_of_sale && buyer_of_sale != NO_BUYER)) &&
-        ((ticket_state == PAID || ticket_state == DELIVERED || ticket_state == SETTLED) -> buyer_of_sale != NO_BUYER)
-    )
-}
-
-/* L1: Paid ticket eventually reaches SETTLED or REFUNDED (under weak fairness, A6/A9) */
-ltl L1 {
-    [] (ticket_state == PAID -> <> (ticket_state == SETTLED || ticket_state == REFUNDED))
-}
-
-/* L2: Delivered ticket eventually reaches SETTLED (under Assumption A9) */
-ltl L2 {
-    [] (ticket_state == DELIVERED -> <> (ticket_state == SETTLED))
-}
-
-/* L3: System eventually reaches a terminal state (SETTLED, WITHDRAWN, or REFUNDED) */
-ltl L3 {
-    <> (ticket_state == SETTLED || ticket_state == WITHDRAWN || ticket_state == REFUNDED)
-}
-/* === M3 SECTION END: LTL Specifications (S1-S9, L1-L3) === */
+/* === M3 SECTION START: LTL Specifications (S1-S7, L1-L5) === */
+#include "properties.pml"
+/* === M3 SECTION END: LTL Specifications (S1-S7, L1-L5) === */
